@@ -1,0 +1,223 @@
+2. nginx ingress
+   helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+
+helm show values ingress-nginx --repo https://kubernetes.github.io/ingress-nginx
+
+helm upgrade --install ingress-nginx ingress-nginx \
+--repo https://kubernetes.github.io/ingress-nginx \
+--namespace ingress-nginx --create-namespace
+
+kubectl get services ingress-nginx-controller --namespace=ingress-nginx
+
+#Все values для ингресса
+https://github.com/kubernetes/ingress-nginx/blob/main/charts/ingress-nginx/values.yaml
+
+#По поводу внешнего айпишника:
+#Можно вручную поставить ноду кластера
+kubectl patch svc ingress-nginx-controller -n ingress-nginx -p '{"spec": {"type": "LoadBalancer", "externalIPs":["93.125.75.111"]}}'
+ИЛИ
+helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --set controller.service.externalIPs={"93.125.75.111"} --set "controller.extraArgs.enable-ssl-passthrough=" --namespace ingress-nginx
+
+
+#Можно использовать host network: https://kubernetes.github.io/ingress-nginx/deploy/baremetal/#via-the-host-network
+helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --set controller.service.enabled=false --set controller.hostNetwork=true --set "controller.extraArgs.enable-ssl-passthrough=" --namespace ingress-nginx
+В ЭТОМ СЛУЧАЕ SERVICE НЕ НУЖЕН!!!
+
+#Создание ингресса
+kubectl create ingress kubernetes-dashboard-ingress --class=nginx --rule="/*=kubernetes-dashboard-kong-proxy:443" -n kubernetes-dashboard
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+name: kubernetes-dashboard-ingress
+annotations:
+nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+rules:
+- http:
+  paths:
+    - path: /
+      pathType: Prefix
+      backend:
+      service:
+      name: kubernetes-dashboard-kong-proxy
+      port:
+      number: 443
+
+Nginx is configured to automatically discover all ingress with the kubernetes.io/ingress.class: "nginx" annotation or where ingressClassName: nginx is present.
+Please note that the ingress resource should be placed inside the same namespace of the backend resource.
+
+#Секрет для proxy ssl доступ к дэшборду - не понадобилось
+#kubectl -n ingress-nginx create secret generic ingress-nginx-tls --from-file=tls.crt=cluster.crt --from-file=tls.key=cluster.key --from-file=ca.crt=localhost-chain.pem
+
+#Чтобы работал ssl passthrough к дэшборду:
+Аннотация для ingress:
+nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+
+Опция в ingress controller (args):
+'--enable-ssl-passthrough'
+
+CLUSTER_TRICKS
+export KUBECONFIG=$(pwd)/kube_config_cluster.yml
+
+kubectl delete "$(kubectl api-resources --namespaced=true --verbs=delete -o name | tr "\n" "," | sed -e 's/,$//')" --all
+
+sudo netstat -pna | grep <port number>
+
+lsof -i -P -n | grep <port number>
+
+
+NODE CLEANUP
+docker rm -f $(docker ps -aq)
+sudo iptables -P INPUT ACCEPT && sudo iptables -P FORWARD ACCEPT && sudo iptables -P OUTPUT ACCEPT
+sudo iptables -F
+sudo iptables -X
+
+sudo ip link set flannel.1 down
+sudo ip link delete flannel.1
+
+
+---old
+
+CENTOS
+
+CONFIGURE FIREWALLD
+https://ranchermanager.docs.rancher.com/v2.0-v2.4/getting-started/installation-and-upgrade/advanced-options/advanced-use-cases/open-ports-with-firewalld
+(upd.: лучше вырубить нах)
+
+Идея: добавить хелсчеки на тему прохождения DNS Запросов:
+https://ranchermanager.docs.rancher.com/troubleshooting/other-troubleshooting-tips/dns#check-if-domain-names-are-resolving
+
+
+#contour gateway
+kind: GatewayClass
+apiVersion: gateway.networking.k8s.io/v1
+metadata:
+name: contour-gateway-class
+spec:
+controllerName: projectcontour.io/gateway-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+name: contour-gateway
+spec:
+addresses:
+- type: IPAddress
+  value: 93.125.75.111
+  gatewayClassName: contour-gateway-class
+  listeners:
+- allowedRoutes:
+  namespaces:
+  from: All
+  name: tls
+  port: 443
+  protocol: TLS
+  tls:
+  mode: Passthrough
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+name: kubernetes-dashboard-route
+spec:
+parentRefs:
+- name: contour-gateway
+  namespace: projectcontour
+  rules:
+- backendRefs:
+    - kind: Service
+      name: kubernetes-dashboard-kong-proxy
+      port: 443
+
+#cilium gateway
+https://docs.cilium.io/en/stable/installation/k8s-install-rke/#rke-install
+https://docs.cilium.io/en/latest/installation/k8s-install-helm/
+https://isovalent.com/blog/post/tutorial-getting-started-with-the-cilium-gateway-api/
+https://docs.cilium.io/en/latest/network/servicemesh/gateway-api/gateway-api/
+https://docs.cilium.io/en/stable/network/servicemesh/gateway-api/gateway-api/#gs-gateway-host-network-mode
+#Изменить конфиг кластера:
+network:
+plugin: none
+#Развернуть кластер
+#поставить crd
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
+#Поставить cilium cli:
+CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+CLI_ARCH=amd64
+if [ "$(uname -m)" = "aarch64" ]; then CLI_ARCH=arm64; fi
+curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
+sudo tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
+rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+#Разобраться с сетевым интерфейсом
+ip link show type vxlan
+sudo ip link set flannel.1 down
+sudo ip link delete flannel.1
+#Поставить cilium:
+#Проблема с версией: https://github.com/cilium/cilium/issues/35562
+#1.17.0-pre.2 - поставила по факту
+helm repo add cilium https://helm.cilium.io
+helm repo update
+helm upgrade --install cilium cilium/cilium --version 1.16.3 --namespace kube-system --set gatewayAPI.enabled=true --set operator.replicas=1 --set nodePort.enabled=true  --set nodePort.addresses={93.125.75.111/24}
+helm upgrade --install cilium cilium/cilium --version 1.16.3 --namespace kube-system --set gatewayAPI.enabled=true --set kubeProxyReplacement=true --set operator.replicas=1
+
+helm upgrade --install cilium cilium/cilium --version 1.17.0-pre.2 --namespace kube-system --set gatewayAPI.enabled=true --set kubeProxyReplacement=true --set operator.replicas=1 --set gatewayAPI.hostNetwork.enabled=true
+Проверка:
+ciluim status
+kubectl get gatewayclasses.gateway.networking.k8s.io
+kubectl -n kube-system exec ds/cilium -- cilium-dbg status | grep KubeProxyReplacement
+#Залить gateway и роут:
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+name: cilium-gateway
+spec:
+addresses:
+- type: IPAddress
+  value: 93.125.75.111
+  gatewayClassName: cilium
+  listeners:
+- allowedRoutes:
+  namespaces:
+  from: All
+  name: tls
+  port: 443
+  protocol: TLS
+  tls:
+  mode: Passthrough
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+name: kubernetes-dashboard-route
+spec:
+parentRefs:
+- name: cilium-gateway
+  namespace: kubernetes-dashboard
+  rules:
+- backendRefs:
+    - kind: Service
+      name: kubernetes-dashboard-kong-proxy
+      port: 443
+
+---
+#Создать Pool
+apiVersion: "cilium.io/v2alpha1"
+kind: CiliumLoadBalancerIPPool
+metadata:
+name: "cilium-pool"
+spec:
+blocks:
+- cidr: "93.125.75.111/32"
+  serviceSelector:
+  matchLabels:
+  "io.kubernetes.service.namespace": "kubernetes-dashboard"
+---
+apiVersion: cilium.io/v2alpha1
+kind: CiliumL2AnnouncementPolicy
+metadata:
+name: cilium-policy
+spec:
+externalIPs: true

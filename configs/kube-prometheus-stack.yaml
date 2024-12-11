@@ -1,0 +1,121 @@
+alertmanager:
+  alertmanagerSpec:
+    logLevel: debug 
+  config:
+    global:
+      http_config:
+        tls_config:
+          insecure_skip_verify: true
+      resolve_timeout: 5m
+    route:
+      group_by: ["namespace"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: telegram
+      routes:
+        - receiver: telegram
+          matchers:
+            - severity = "critical"
+    receivers:
+      - name: telegram
+        telegram_configs:
+          - chat_id: "***"
+            bot_token: "***"
+            api_url: "https://api.telegram.org"
+            send_resolved: true
+            parse_mode: HTML
+            message: '{{ template "telegram.default" . }}'
+            tls_config:
+              insecure_skip_verify: true
+    templates:
+      - "/etc/alertmanager/config/*.tmpl"
+  templateFiles:
+    template_1.tmpl: |-
+      {{ define "cluster" }}{{ .ExternalURL | reReplaceAll ".*alertmanager\\.(.*)" "$1" }}{{ end }}
+      {{ define "slack.myorg.text" }}
+      {{- $root := . -}}
+      {{ range .Alerts }}
+        *Alert:* {{ .Annotations.summary }} - `{{ .Labels.severity }}`
+        *Cluster:* {{ template "cluster" $root }}
+        *Description:* {{ .Annotations.description }}
+        *Graph:* <{{ .GeneratorURL }}|:chart_with_upwards_trend:>
+        *Runbook:* <{{ .Annotations.runbook }}|:spiral_note_pad:>
+        *Details:*
+          {{ range .Labels.SortedPairs }} - *{{ .Name }}:* `{{ .Value }}`
+          {{ end }}
+      {{ end }}
+      {{ end }}
+    template_telegram.tmpl: |-
+      {{ define "telegram.default" }}
+      {{ range .Alerts }}
+      {{ if eq .Status "firing"}}&#x1F525<b>{{ .Status | toUpper }}</b>&#x1F525{{ else }}&#x2705<b>{{ .Status | toUpper }}</b>&#x2705{{ end }}
+      <b>{{ .Labels.alertname }}</b>
+      {{- if .Labels.severity }}
+      <b>Severity:</b> {{ .Labels.severity }}
+      {{- end }}
+      {{- if .Labels.ds_name }}
+      <b>Database:</b> {{ .Labels.ds_name }}
+      {{- if .Labels.ds_group }}
+      <b>Database group:</b> {{ .Labels.ds_group }}
+      {{- end }}
+      {{- end }}
+      {{- if .Labels.ds_id }}
+      <b>Cluster UUID: </b>
+      <code>{{ .Labels.ds_id }}</code>
+      {{- end }}
+      {{- if .Labels.instance }}
+      <b>DBaaS region:</b> {{ .Labels.instance }}
+      {{- end }}
+      {{- if .Annotations.message }}
+      {{ .Annotations.message }}
+      {{- end }}
+      {{- if .Annotations.summary }}
+      {{ .Annotations.summary }}
+      {{- end }}
+      {{- if .Annotations.description }}
+      {{ .Annotations.description }}
+      {{- end }}
+      {{ end }}
+      {{ end }}
+    template_telegram_simple.tmpl: |-
+      {{ define "telegram.simple" }}
+      <b>Openproject pod is not running</b>
+      <b>Pod:</b> {{ .Labels.pod }}
+      <b>Instance:</b>: {{ .Labels.instance }}
+      <b>Namespace</b>: {{ .Labels.namespace }}
+      <b>Severity</b>: {{ .Labels.severity }}
+      {{ end }}
+      
+
+additionalPrometheusRulesMap:
+  rule-name:
+    groups:
+      - name: openproject
+        rules:
+          - alert: openproject pod not running
+            expr: kube_pod_status_ready{condition="true",pod=~"openproject.*",namespace="openproject"}==0
+            for:
+            labels:
+              severity: critical
+            annotations:
+              summary: some pod is not running
+              description: "{{ $labels.instance }} is not running"
+              
+
+grafana:
+  grafana.ini:
+    analytics:
+      check_for_updates: false
+             
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
+              
