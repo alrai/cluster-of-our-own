@@ -7,6 +7,8 @@
 5. [Установка Kubernetes Dashboard](#установка-kubernetes-dashboard)
 6. [Установка Openproject](#установка-openproject)
 7. [Установка kube-prometheus-stack](#установка-kube-prometheus-stack)
+8. [Полезные команды](#полезные-команды)
+9. [Полезные ссылки](#полезные-ссылки)
 
 ### Вводные
 Сервер на Ubuntu server 24.04.1 с внешним IP адресом.

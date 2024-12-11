@@ -14,9 +14,9 @@ https://github.com/kubernetes/ingress-nginx/blob/main/charts/ingress-nginx/value
 
 #По поводу внешнего айпишника:
 #Можно вручную поставить ноду кластера
-kubectl patch svc ingress-nginx-controller -n ingress-nginx -p '{"spec": {"type": "LoadBalancer", "externalIPs":["93.125.75.111"]}}'
+kubectl patch svc ingress-nginx-controller -n ingress-nginx -p '{"spec": {"type": "LoadBalancer", "externalIPs":["<external ip>"]}}'
 ИЛИ
-helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --set controller.service.externalIPs={"93.125.75.111"} --set "controller.extraArgs.enable-ssl-passthrough=" --namespace ingress-nginx
+helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --set controller.service.externalIPs={"<external ip>"} --set "controller.extraArgs.enable-ssl-passthrough=" --namespace ingress-nginx
 
 
 #Можно использовать host network: https://kubernetes.github.io/ingress-nginx/deploy/baremetal/#via-the-host-network
@@ -105,7 +105,7 @@ name: contour-gateway
 spec:
 addresses:
 - type: IPAddress
-  value: 93.125.75.111
+  value: <external ip>
   gatewayClassName: contour-gateway-class
   listeners:
 - allowedRoutes:
@@ -160,7 +160,7 @@ sudo ip link delete flannel.1
 #1.17.0-pre.2 - поставила по факту
 helm repo add cilium https://helm.cilium.io
 helm repo update
-helm upgrade --install cilium cilium/cilium --version 1.16.3 --namespace kube-system --set gatewayAPI.enabled=true --set operator.replicas=1 --set nodePort.enabled=true  --set nodePort.addresses={93.125.75.111/24}
+helm upgrade --install cilium cilium/cilium --version 1.16.3 --namespace kube-system --set gatewayAPI.enabled=true --set operator.replicas=1 --set nodePort.enabled=true  --set nodePort.addresses={<external ip>/24}
 helm upgrade --install cilium cilium/cilium --version 1.16.3 --namespace kube-system --set gatewayAPI.enabled=true --set kubeProxyReplacement=true --set operator.replicas=1
 
 helm upgrade --install cilium cilium/cilium --version 1.17.0-pre.2 --namespace kube-system --set gatewayAPI.enabled=true --set kubeProxyReplacement=true --set operator.replicas=1 --set gatewayAPI.hostNetwork.enabled=true
@@ -176,7 +176,7 @@ name: cilium-gateway
 spec:
 addresses:
 - type: IPAddress
-  value: 93.125.75.111
+  value: <external ip>
   gatewayClassName: cilium
   listeners:
 - allowedRoutes:
@@ -210,7 +210,7 @@ metadata:
 name: "cilium-pool"
 spec:
 blocks:
-- cidr: "93.125.75.111/32"
+- cidr: "<external ip>/32"
   serviceSelector:
   matchLabels:
   "io.kubernetes.service.namespace": "kubernetes-dashboard"
