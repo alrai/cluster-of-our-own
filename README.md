@@ -460,6 +460,7 @@ spec:
 sudo tar xvf /opt/kubernetes_volumes/postgresql_backups/<дата выполнения бэкапа>/base.tar.gz -C  /opt/kubernetes_volumes/postgresql/data
 sudo tar xvf /opt/kubernetes_volumes/postgresql_backups/<дата выполнения бэкапа>/pg_wal.tar.gz -C /opt/kubernetes_volumes/postgresql/data/pg_wal
 ```
+**TODO: в cron job не устанавливается временная зона, несмотря на параметр timezone. В названии директории с бэкапами указывается время на 3 часа меньше, чем актуальное.**
 
 ### Установка kube-prometheus-stack
 **TODO: добавить шаг заведения бота в telegram и получения токена и chat id** <br>
