@@ -252,7 +252,7 @@ spec:
 **TODO: добавить шаг удаления ingress, развернутого вместе с дэшбордом. Поисследовать, есть ли опция, которая отключает этот компонент при раскатке.**
 
 ### Установка Openproject
-Создать storage class для Openproject и БД Postgresql:
+Создать storage class для Openproject, БД Postgresql и бэкапов БД Postgresql:
 ```yaml
 ---
 kind: StorageClass
@@ -268,8 +268,16 @@ metadata:
   name: openproject
 provisioner: kubernetes.io/no-provisioner
 volumeBindingMode: WaitForFirstConsumer
+---
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: postgresql-backups
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
 ```
-Создать persistent volume для Openproject и БД Postgresql:
+Создать persistent volume для Openproject, БД Postgresql и бэкапов БД Postgresql:<br>
+**TODO: persistent volume для бэкапов должен ссылаться на директорию на другом хосте. Нужно выделить такой хост, примонтировать его к файловой системе стенда** 
 ```yaml
 ---
 apiVersion: v1
@@ -319,13 +327,75 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: openproject
   volumeMode: Filesystem
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgresql-backups-persistent-volume
+spec:
+  accessModes:
+    - ReadWriteOnce
+    - ReadWriteMany
+  capacity:
+    storage: 512Gi
+  hostPath:
+    path: /opt/kubernetes_volumes/postgresql_backups
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - <external ip>
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: postgresql-backups
+  volumeMode: Filesystem
 ```
 Добавить в helm репозиторий Openproject:
 ```bash
 helm repo add openproject https://charts.openproject.org
 helm repo update
 ```
-Установить Openproject:
+Завести файл openproject-values.yaml со значениями для helm chart Openproject:
+```yaml
+postgresql:
+  primary:
+    pgHbaConfiguration: |-
+      # TYPE  DATABASE        USER             ADDRESS                METHOD
+      # "local" is for Unix domain socket connections only
+      local   all             all                                     trust
+      # IPv4 local connections:
+      #host    all             all              127.0.0.1/32           trust
+      # IPv6 local connections:
+      #host    all             all              ::1/128                trust
+      # Allow replication connections from localhost, by a user with the
+      # replication privilege.
+      local   replication     all                                     trust
+      host    replication     all              127.0.0.1/32           trust
+      host    replication     all              ::1/128                trust
+      host    replication     postgres         all                    trust	  
+      host    openproject            read_only_user ::0/0                  trust
+      host    openproject            read_only_user 0.0.0.0/0              trust
+      host    openproject            openproject        ::0/0                  scram-sha-256
+      host    openproject            openproject       0.0.0.0/0              scram-sha-256
+      host    all             all              0.0.0.0/0              reject
+      host    all             all              ::0/0                  reject
+      # IPv4 local connections:
+      # IPv6 local connections:
+      # Unix socket connections:
+      local   all             postgres                                trust
+      # Enable streaming replication with wal2json:
+      host    replication     all             127.0.0.1/32            trust
+  backup:
+    cronjob:
+      command:
+      - /bin/sh
+      - -c
+      - "pg_basebackup --no-password -D ${PGDUMP_DIR}/$(date '+%Y-%m-%d-%H-%M') -Ft -z -Xs -P'"
+```
+Установить Openproject: <br>
+**TODO: вынести все переменные в команде ниже из --set в файл openproject-values.yaml**
 ```bash
 helm upgrade --create-namespace --namespace openproject --install openproject openproject/openproject \
 --set openproject.https=true \
@@ -333,7 +403,14 @@ helm upgrade --create-namespace --namespace openproject --install openproject op
 --set persistence.enabled=true \
 --set persistence.storageClassName=openproject \
 --set openproject.useTmpVolumes=false \
---set postgresql.global.storageClass=postgresql \
+--set postgresql.primary.persistence.storageClass=postgresql \
+--set postgresql.global.defaultStorageClass=postgresql \
+--set postgresql.backup.enabled=true \
+--set postgresql.backup.cronjob.storage.enabled=true \
+--set postgresql.backup.cronjob.storage.storageClass=postgresql-backups \
+--set postgresql.backup.cronjob.storage.size=512Gi \
+--set postgresql.backup.cronjob.storage.mountPath=/opt/kubernetes_volumes/postgresql_backups \
+--set postgresql.backup.cronjob.timezone="Europe/Moscow" \
 --set postgresql.auth.username=openproject \
 --set postgresql.auth.password=<password> \
 --set postgresql.auth.database=openproject \
@@ -341,10 +418,16 @@ helm upgrade --create-namespace --namespace openproject --install openproject op
 --set postgresql.global.auth.username=openproject \
 --set postgresql.global.auth.password=<password> \
 --set postgresql.global.auth.database=openproject \
+--set postgresql.global.auth.replicationPassword=<password> \
 --set postgresql.global.auth.postgresPassword=<password> \
 --set postgresql.image.tag=17.1.0-debian-12-r0 \
 --set containerSecurityContext.readOnlyRootFilesystem=false \
---set openproject.host=<external ip>:8443
+--set containerSecurityContext.readOnlyRootFilesystem=false \
+--set openproject.host=<external ip>:8443 \
+--set openproject.admin_user.name=admin \
+--set openproject.admin_user.password=<password> \
+--set openproject.admin_user.password_reset=false \
+-f openproject-values.yaml
 ```
 В секрете openproject-core в переменной DATABASE_HOST убрать .svc.cluster.local (с этим суффиксом почему-то БД недоступна). **TODO: Разобраться, почему, и можно ли раскатывать сразу с работающим именем.**<br>
 Также в ряде случаев были замечены следующие проблемы при редеплое (**TODO: исследовать проблемы**):
@@ -371,6 +454,11 @@ spec:
         - path:
             type: PathPrefix
             value: /
+```
+Вместе с Openproject будет создана cron job, выполняющая бэкапы БД Postgresql раз в сутки. Архив с бэкапом будет размещен в директории /opt/kubernetes_volumes/postgresql_backups/<дата выполнения бэкапа>. Для восстановления БД из бэкапа нужно разархивировать файлы БД и wal-журналы в директорию data:
+```bash
+sudo tar xvf /opt/kubernetes_volumes/postgresql_backups/<дата выполнения бэкапа>/base.tar.gz -C  /opt/kubernetes_volumes/postgresql/data
+sudo tar xvf /opt/kubernetes_volumes/postgresql_backups/<дата выполнения бэкапа>/pg_wal.tar.gz -C /opt/kubernetes_volumes/postgresql/data/pg_wal
 ```
 
 ### Установка kube-prometheus-stack
